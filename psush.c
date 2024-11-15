@@ -1,6 +1,5 @@
 
 #include <stdbool.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -263,7 +262,7 @@ void exec_external(cmd_t * cmd){
 		args[i] = NULL;
 		if(cmd->output_dest == REDIRECT_FILE){
 			int fdout;
-			fdout = open(cmd->input_file_name,  O_WRONLY | O_CREAT | O_TRUNC,S_IRUSR | S_IWUSR);
+			fdout = open(cmd->output_file_name,  O_WRONLY | O_CREAT | O_TRUNC,S_IRUSR | S_IWUSR);
 			if(fdout<0){
 				fprintf(stderr,"******* redir out failed %d *******\n", errno);
 				exit(7);
