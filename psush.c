@@ -7,6 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <pwd.h>
+#include <errno.h>
 
 #include <fcntl.h>  // Required for open()
 #include <sys/stat.h>
@@ -244,17 +245,42 @@ exec_commands( cmd_list_t *cmds )
 void exec_external(cmd_t * cmd){
 	pid_t pid = fork();
 
+
 	if(pid == -1){
 		perror("Failure Forking");
 		exit(EXIT_FAILURE);
 	}else if(pid ==0){
+		param_t *param = cmd->param_list;
+		int i = 1; 	
 		char *args[MAX_ARGS];
-		args[0] = cmd->cmd;  // e.g., 
-		for (int i = 0; i < cmd->param_count; i++) {
-			args[i + 1] = cmd->param_list[i].param;  // e.g., directory names or options
+		args[0] = cmd->cmd;
+		while (param != NULL) {
+			args[i] = param->param;
+			param = param->next;
+			i++;
 		}
-		args[cmd->param_count + 1] = NULL;  // Null-terminate the arguments array
 
+		args[i] = NULL;
+		if(cmd->output_dest == REDIRECT_FILE){
+			int fdout;
+			fdout = open(cmd->input_file_name,  O_WRONLY | O_CREAT | O_TRUNC,S_IRUSR | S_IWUSR);
+			if(fdout<0){
+				fprintf(stderr,"******* redir out failed %d *******\n", errno);
+				exit(7);
+			}
+			dup2(fdout, STDOUT_FILENO);
+			close(fdout);
+		}
+		if(cmd->input_src == REDIRECT_FILE){
+			int fdin;
+			fdin = open(cmd->input_file_name,  O_RDONLY);
+			if(fdin<0){
+				fprintf(stderr,"******* redir in failed %d *******\n", errno);
+				exit(7);
+			}
+			dup2(fdin, STDIN_FILENO);
+			close(fdin);
+		}
 		// Execute the external command
 		if (execvp(cmd->cmd, args) == -1) {
 			perror("Exec failed");
