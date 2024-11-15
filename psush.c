@@ -10,6 +10,7 @@
 
 #include <fcntl.h>  // Required for open()
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include "cmd_parse.h"
 
 //Define Macros
@@ -22,6 +23,7 @@ char * historylist[HIST];
 void addhistory(const char * newcmd, char * history[]);
 void read_command( char * newinput);
 void displayhistory(char * history[]);
+void exec_external(cmd_t * cmd);
 void echofunc(param_t * print, int argcount);
 bool is_verbose;
 
@@ -62,7 +64,7 @@ int main(int argc, char * argv[]){
 		    exit(EXIT_FAILURE);
 	    }
 	    if(isatty(fileno(stdout))){
-		    printf(" PSUsh %s\n%s@%s # \n", cwd, getenv("LOGNAME"), server);
+		    printf(" PSUsh %s\n%s@%s # ", cwd, getenv("LOGNAME"), server);
 		    fflush(stdout);
 	    }
 	    fputs(prompt, stdout);
@@ -70,8 +72,8 @@ int main(int argc, char * argv[]){
 	    ret_val = fgets(str, MAX_STR_LEN, stdin);
 
 	    if (NULL == ret_val) {
-		    // end of input, a control-D was pressed.
-		    // Bust out of the input loop and go home.
+	    printf("\nExiting the shell.\n");
+	    exit(EXIT_SUCCESS);
 		    break;
 	    }
 
@@ -193,14 +195,12 @@ exec_commands( cmd_list_t *cmds )
             if (0 == cmd->param_count) {
                 // Just a "cd" on the command line without a target directory
                 // need to cd to the HOME directory.
-
 		    chdir(getenv("HOME"));
             }
             else {
                 // try and cd to the target directory. It would be good to check
                 // for errors here.
                 if (0 == chdir(cmd->param_list->param)) {
-			exit(EXIT_SUCCESS);
                     // a happy chdir!  ;-)
                 }
                 else {
@@ -231,6 +231,7 @@ exec_commands( cmd_list_t *cmds )
             // A single command to create and exec
             // If you really do things correctly, you don't need a special call
             // for a single command, as distinguished from multiple commands.
+	    exec_external(cmd);
         }
     }
     else {
@@ -240,6 +241,30 @@ exec_commands( cmd_list_t *cmds )
     }
 }
 
+void exec_external(cmd_t * cmd){
+	pid_t pid = fork();
+
+	if(pid == -1){
+		perror("Failure Forking");
+		exit(EXIT_FAILURE);
+	}else if(pid ==0){
+		char *args[MAX_ARGS];
+		args[0] = cmd->cmd;  // e.g., 
+		for (int i = 0; i < cmd->param_count; i++) {
+			args[i + 1] = cmd->param_list[i].param;  // e.g., directory names or options
+		}
+		args[cmd->param_count + 1] = NULL;  // Null-terminate the arguments array
+
+		// Execute the external command
+		if (execvp(cmd->cmd, args) == -1) {
+			perror("Exec failed");
+			exit(EXIT_FAILURE);
+		}
+	}else{
+		wait(NULL);
+	}
+
+}
 /*
 
 void
