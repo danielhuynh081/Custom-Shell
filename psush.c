@@ -19,7 +19,7 @@
 #define MAX_CMD_LEN 256
 
 //Define functions
-char * historylist[HIST];
+char * historylist[HIST] = {NULL};
 void addhistory(const char * newcmd, char * history[]);
 void read_command( char * newinput);
 void displayhistory(char * history[]);
@@ -28,6 +28,7 @@ void echofunc(param_t * print, int argcount);
 bool is_verbose;
 char ** create_raggedy(cmd_t* cmds);
 void exec_pipelines(cmd_list_t * cmd);
+void freehistory(char * history[]);
 
 
 // 1. bye done
@@ -141,12 +142,23 @@ int main(int argc, char * argv[]){
 	    // We (that includes you) need to free up all the stuff we just
 	    // allocated from the heap. That linked list of linked lists looks
 	    // like it will be nasty to free up, but just follow the memory.
+	    free_list(cmd_list);
 	    cmd_list = NULL;
     }
     //free history function
+    freehistory(historylist);
 
     return(EXIT_SUCCESS);
 }
+
+void freehistory(char * history[]){
+    for(int i= 0; i< HIST; i++){
+	free(history[i]);
+	history[i] = NULL;
+    }
+    memset(historylist, 0, sizeof(historylist));
+}
+
 
 void simple_argv(int argc, char *argv[] )
 {
@@ -233,6 +245,7 @@ exec_commands( cmd_list_t *cmds )
             // If you really do things correctly, you don't need a special call
             // for a single command, as distinguished from multiple commands.
 	    exec_external(cmd);
+	    free_list(cmds);
         }
     }
     else {
@@ -241,9 +254,23 @@ exec_commands( cmd_list_t *cmds )
         // This really falls into Stage 2.
 	    exec_pipelines(cmds);
     }
+    freehistory(historylist);
+    //free_list(cmds);
 }
 char ** create_raggedy(cmd_t* cmds){
-	char **arr = (char **)malloc(4 * sizeof(char *));
+	int count = 0;
+	char **arr;
+	if(!cmds || !cmds->cmd){
+		printf("null command for raggedy");
+		exit(EXIT_FAILURE);
+	}
+	 count = cmds->param_count;
+	arr = (char **)malloc((count + 2) * sizeof(char *)); //+ 2 for the command in the beginning and the null temrinator
+
+	if (arr == NULL) {
+		perror("malloc failed");
+		exit(EXIT_FAILURE);
+	}
 	printf("cmd: %s", cmds->cmd);
 	return arr;
 }
@@ -275,13 +302,13 @@ void exec_pipelines(cmd_list_t * cmds){
 			{
 				dup2(p_trail, STDIN_FILENO);
 			}
-			if(cmd->next != NULL){
+			if(cmd->next != NULL){ //if not last
 				if (dup2(pipe_fds[1], STDOUT_FILENO) == -1) {
 					perror("dup2 failed for stdout");
 					exit(EXIT_FAILURE);
 				}
 			}
-			if (p_trail != -1) close(p_trail);
+		//	if (p_trail != -1) close(p_trail);
 			if (cmd->next != NULL) {
 				close(pipe_fds[0]);
 				close(pipe_fds[1]);
@@ -291,9 +318,11 @@ void exec_pipelines(cmd_list_t * cmds){
 			args = create_raggedy(cmd);
 			execvp(args[0], args);
 
-			// If execvp fails
-			perror("exec failed");
-			exit(EXIT_FAILURE);
+			if (execvp(args[0], args) == -1) {
+				// If execvp fails
+				perror("Exec failed");
+				exit(EXIT_FAILURE);
+			}
 
 		}
 		// Parent process
@@ -307,6 +336,8 @@ void exec_pipelines(cmd_list_t * cmds){
 
 	}
 	while(wait(NULL)>0);
+	args= NULL;
+	
 
 }
 void exec_external(cmd_t * cmd){
@@ -353,6 +384,7 @@ void exec_external(cmd_t * cmd){
 		}
 	}else{
 		wait(NULL);
+
 	}
 
 }
@@ -360,10 +392,13 @@ void exec_external(cmd_t * cmd){
 	void
 free_list(cmd_list_t *cmd_list)
 {
+	
 	cmd_t * current = cmd_list->head;
+	cmd_t * temp;
 	while(current){
+		temp = current->next;
 		free_cmd(current);
-		current = current->next;
+		current = temp;
 	}	
 	free(cmd_list);
 	cmd_list = NULL;
@@ -389,16 +424,28 @@ print_list(cmd_list_t *cmd_list)
 	void
 free_cmd (cmd_t *cmd)
 {
+	param_t * paramlist = cmd->param_list;
+	param_t * temp;
+	while(paramlist){
+		temp = paramlist->next;
+		free(paramlist->param);
+		free(paramlist);
+		paramlist = temp;
+	}
+
 	if(!cmd){
 		exit(EXIT_FAILURE);
 	}
+	/*
 	if(cmd->next){
 		free_cmd(cmd->next);
 	}
+	*/
 	free(cmd->raw_cmd);
 	free(cmd->cmd);
 	free(cmd->input_file_name);
 	free(cmd->output_file_name);
+	free(cmd);
 
 	return;
 }
@@ -561,6 +608,10 @@ parse_commands(cmd_list_t *cmd_list)
 	if (is_verbose > 0) {
 		print_list(cmd_list);
 	}
+	raw = NULL;
+	arg = NULL;
+	free_cmd(cmd);
+
 }
 
 
@@ -703,5 +754,9 @@ void addhistory(const char * newcmd, char * history[]){
 	//	history[i+1] = history[i];
 	//}
 	memmove(&(history[1]), &(history[0]), (HIST-1) * sizeof(char* ));
-	history[0] = strdup(newcmd);
+	history[0] = strdup(newcmd); // Duplicate new command
+	if (!history[0]) {
+		perror("strdup failed");
+		exit(EXIT_FAILURE);
+	}
 }
