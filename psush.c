@@ -26,6 +26,8 @@ void displayhistory(char * history[]);
 void exec_external(cmd_t * cmd);
 void echofunc(param_t * print, int argcount);
 bool is_verbose;
+char ** create_raggedy(cmd_t* cmds);
+void exec_pipelines(cmd_list_t * cmd);
 
 
 // 1. bye done
@@ -139,7 +141,6 @@ int main(int argc, char * argv[]){
 	    // We (that includes you) need to free up all the stuff we just
 	    // allocated from the heap. That linked list of linked lists looks
 	    // like it will be nasty to free up, but just follow the memory.
-//	    free_list(cmd_list);
 	    cmd_list = NULL;
     }
     //free history function
@@ -238,13 +239,78 @@ exec_commands( cmd_list_t *cmds )
         // Other things???
         // More than one command on the command line. Who'da thunk it!
         // This really falls into Stage 2.
+	    exec_pipelines(cmds);
     }
 }
+char ** create_raggedy(cmd_t* cmds){
+	char **arr = (char **)malloc(4 * sizeof(char *));
+	printf("cmd: %s", cmds->cmd);
+	return arr;
+}
 
+void exec_pipelines(cmd_list_t * cmds){
+	cmd_t * cmd = cmds->head;
+	char ** args;
+	int p_trail = -1; // no previous pipe exists, first pipe
+	int pipe_fds[2];
+	pid_t pid;
+	if(!cmd){
+		printf("error finding commands");
+		exit(EXIT_FAILURE);
+	}
+	while(cmd){
+		if(cmd->next){
+			if(pipe(pipe_fds) ==-1){
+				printf("error creating pipe");
+				exit(EXIT_FAILURE);
+			}
+			printf("\nCreated pipe successfully");
+		}
+		pid = fork();
+		if(pid == -1){
+			perror("Failure Forking");
+			exit(EXIT_FAILURE);
+		}else if(pid ==0){
+			if(p_trail != -1)// if not the first pipe
+			{
+				dup2(p_trail, STDIN_FILENO);
+			}
+			if(cmd->next != NULL){
+				if (dup2(pipe_fds[1], STDOUT_FILENO) == -1) {
+					perror("dup2 failed for stdout");
+					exit(EXIT_FAILURE);
+				}
+			}
+			if (p_trail != -1) close(p_trail);
+			if (cmd->next != NULL) {
+				close(pipe_fds[0]);
+				close(pipe_fds[1]);
+			}
+
+			// Execute the command with a raggedy array
+			args = create_raggedy(cmd);
+			execvp(args[0], args);
+
+			// If execvp fails
+			perror("exec failed");
+			exit(EXIT_FAILURE);
+
+		}
+		// Parent process
+		if (p_trail != -1) close(p_trail); // Close the old pipe read end
+		if (cmd->next != NULL) {
+			close(pipe_fds[1]); // Close the current pipe write end
+			p_trail = pipe_fds[0]; // Update p_trail to the current pipe read end
+		}
+
+		cmd = cmd->next;
+
+	}
+	while(wait(NULL)>0);
+
+}
 void exec_external(cmd_t * cmd){
 	pid_t pid = fork();
-
-
 	if(pid == -1){
 		perror("Failure Forking");
 		exit(EXIT_FAILURE);
@@ -290,68 +356,84 @@ void exec_external(cmd_t * cmd){
 	}
 
 }
-/*
 
-void
+	void
 free_list(cmd_list_t *cmd_list)
 {
-    // Proof left to the student.
-    // You thought I was going to do this for you! HA! You get
-    // the enjoyment of doing it for yourself.
-    return;
+	cmd_t * current = cmd_list->head;
+	while(current){
+		free_cmd(current);
+		current = current->next;
+	}	
+	free(cmd_list);
+	cmd_list = NULL;
+
+	// Proof left to the student.
+	// You thought I was going to do this for you! HA! You get
+	// the enjoyment of doing it for yourself.
+
+	return;
 }
-*/
-void
+
+	void
 print_list(cmd_list_t *cmd_list)
 {
-    cmd_t *cmd = cmd_list->head;
+	cmd_t *cmd = cmd_list->head;
 
-    while (NULL != cmd) {
-        print_cmd(cmd);
-        cmd = cmd->next;
-    }
+	while (NULL != cmd) {
+		print_cmd(cmd);
+		cmd = cmd->next;
+	}
 }
-/*
-void
+
+	void
 free_cmd (cmd_t *cmd)
 {
-    // Proof left to the student.
-    // Yep, on yer own.
-    // I beleive in you.
-    return;
+	if(!cmd){
+		exit(EXIT_FAILURE);
+	}
+	if(cmd->next){
+		free_cmd(cmd->next);
+	}
+	free(cmd->raw_cmd);
+	free(cmd->cmd);
+	free(cmd->input_file_name);
+	free(cmd->output_file_name);
+
+	return;
 }
-*/
+
 // Oooooo, this is nice. Show the fully parsed command line in a nice
 // easy to read and digest format.
-void
+	void
 print_cmd(cmd_t *cmd)
 {
-    param_t *param = NULL;
-    int pcount = 1;
+	param_t *param = NULL;
+	int pcount = 1;
 
-    fprintf(stderr,"raw text: +%s+\n", cmd->raw_cmd);
-    fprintf(stderr,"\tbase command: +%s+\n", cmd->cmd);
-    fprintf(stderr,"\tparam count: %d\n", cmd->param_count);
-    param = cmd->param_list;
+	fprintf(stderr,"raw text: +%s+\n", cmd->raw_cmd);
+	fprintf(stderr,"\tbase command: +%s+\n", cmd->cmd);
+	fprintf(stderr,"\tparam count: %d\n", cmd->param_count);
+	param = cmd->param_list;
 
-    while (NULL != param) {
-        fprintf(stderr,"\t\tparam %d: %s\n", pcount, param->param);
-        param = param->next;
-        pcount++;
-    }
+	while (NULL != param) {
+		fprintf(stderr,"\t\tparam %d: %s\n", pcount, param->param);
+		param = param->next;
+		pcount++;
+	}
 
-    fprintf(stderr,"\tinput source: %s\n"
-            , (cmd->input_src == REDIRECT_FILE ? "redirect file" :
-               (cmd->input_src == REDIRECT_PIPE ? "redirect pipe" : "redirect none")));
-    fprintf(stderr,"\toutput dest:  %s\n"
-            , (cmd->output_dest == REDIRECT_FILE ? "redirect file" :
-               (cmd->output_dest == REDIRECT_PIPE ? "redirect pipe" : "redirect none")));
-    fprintf(stderr,"\tinput file name:  %s\n"
-            , (NULL == cmd->input_file_name ? "<na>" : cmd->input_file_name));
-    fprintf(stderr,"\toutput file name: %s\n"
-            , (NULL == cmd->output_file_name ? "<na>" : cmd->output_file_name));
-    fprintf(stderr,"\tlocation in list of commands: %d\n", cmd->list_location);
-    fprintf(stderr,"\n");
+	fprintf(stderr,"\tinput source: %s\n"
+			, (cmd->input_src == REDIRECT_FILE ? "redirect file" :
+				(cmd->input_src == REDIRECT_PIPE ? "redirect pipe" : "redirect none")));
+	fprintf(stderr,"\toutput dest:  %s\n"
+			, (cmd->output_dest == REDIRECT_FILE ? "redirect file" :
+				(cmd->output_dest == REDIRECT_PIPE ? "redirect pipe" : "redirect none")));
+	fprintf(stderr,"\tinput file name:  %s\n"
+			, (NULL == cmd->input_file_name ? "<na>" : cmd->input_file_name));
+	fprintf(stderr,"\toutput file name: %s\n"
+			, (NULL == cmd->output_file_name ? "<na>" : cmd->output_file_name));
+	fprintf(stderr,"\tlocation in list of commands: %d\n", cmd->list_location);
+	fprintf(stderr,"\n");
 }
 
 // Remember how I told you that use of alloca() is
@@ -361,124 +443,124 @@ print_cmd(cmd_t *cmd)
 // stralloca.
 #define stralloca(_R,_S) {(_R) = alloca(strlen(_S) + 1); strcpy(_R,_S);}
 
-void
+	void
 parse_commands(cmd_list_t *cmd_list)
 {
-    cmd_t *cmd = cmd_list->head;
-    char *arg;
-    char *raw;
+	cmd_t *cmd = cmd_list->head;
+	char *arg;
+	char *raw;
 
-    while (cmd) {
-        // Because I'm going to be calling strtok() on the string, which does
-        // alter the string, I want to make a copy of it. That's why I strdup()
-        // it.
-        // Given that command lines should not be tooooo long, this might
-        // be a reasonable place to try out alloca(), to replace the strdup()
-        // used below. It would reduce heap fragmentation.
-        //raw = strdup(cmd->raw_cmd);
+	while (cmd) {
+		// Because I'm going to be calling strtok() on the string, which does
+		// alter the string, I want to make a copy of it. That's why I strdup()
+		// it.
+		// Given that command lines should not be tooooo long, this might
+		// be a reasonable place to try out alloca(), to replace the strdup()
+		// used below. It would reduce heap fragmentation.
+		//raw = strdup(cmd->raw_cmd);
 
-        // Following my comments and trying out alloca() in here. I feel the rush
-        // of excitement from the pending doom of alloca(), from a macro even.
-        // It's like double exciting.
-        stralloca(raw, cmd->raw_cmd);
+		// Following my comments and trying out alloca() in here. I feel the rush
+		// of excitement from the pending doom of alloca(), from a macro even.
+		// It's like double exciting.
+		stralloca(raw, cmd->raw_cmd);
 
-        arg = strtok(raw, SPACE_DELIM);
-        if (NULL == arg) {
-            // The way I've done this is like ya'know way UGLY.
-            // Please, look away.
-            // If the first command from the command line is empty,
-            // ignore it and move to the next command.
-            // No need free with alloca memory.
-            //free(raw);
-            cmd = cmd->next;
-            // I guess I could put everything below in an else block.
-            continue;
-        }
-        // I put something in here to strip out the single quotes if
-        // they are the first/last characters in arg.
-        if (arg[0] == '\'') {
-            arg++;
-        }
-        if (arg[strlen(arg) - 1] == '\'') {
-            arg[strlen(arg) - 1] = '\0';
-        }
-        cmd->cmd = strdup(arg);
-        // Initialize these to the default values.
-        cmd->input_src = REDIRECT_NONE;
-        cmd->output_dest = REDIRECT_NONE;
+		arg = strtok(raw, SPACE_DELIM);
+		if (NULL == arg) {
+			// The way I've done this is like ya'know way UGLY.
+			// Please, look away.
+			// If the first command from the command line is empty,
+			// ignore it and move to the next command.
+			// No need free with alloca memory.
+			//free(raw);
+			cmd = cmd->next;
+			// I guess I could put everything below in an else block.
+			continue;
+		}
+		// I put something in here to strip out the single quotes if
+		// they are the first/last characters in arg.
+		if (arg[0] == '\'') {
+			arg++;
+		}
+		if (arg[strlen(arg) - 1] == '\'') {
+			arg[strlen(arg) - 1] = '\0';
+		}
+		cmd->cmd = strdup(arg);
+		// Initialize these to the default values.
+		cmd->input_src = REDIRECT_NONE;
+		cmd->output_dest = REDIRECT_NONE;
 
-        while ((arg = strtok(NULL, SPACE_DELIM)) != NULL) {
-            if (strcmp(arg, REDIR_IN) == 0) {
-                // redirect stdin
+		while ((arg = strtok(NULL, SPACE_DELIM)) != NULL) {
+			if (strcmp(arg, REDIR_IN) == 0) {
+				// redirect stdin
 
-                //
-                // If the input_src is something other than REDIRECT_NONE, then
-                // this is an improper command.
-                //
+				//
+				// If the input_src is something other than REDIRECT_NONE, then
+				// this is an improper command.
+				//
 
-                // If this is anything other than the FIRST cmd in the list,
-                // then this is an error.
+				// If this is anything other than the FIRST cmd in the list,
+				// then this is an error.
 
-                cmd->input_file_name = strdup(strtok(NULL, SPACE_DELIM));
-                cmd->input_src = REDIRECT_FILE;
-            }
-            else if (strcmp(arg, REDIR_OUT) == 0) {
-                // redirect stdout
-                       
-                //
-                // If the output_dest is something other than REDIRECT_NONE, then
-                // this is an improper command.
-                //
+				cmd->input_file_name = strdup(strtok(NULL, SPACE_DELIM));
+				cmd->input_src = REDIRECT_FILE;
+			}
+			else if (strcmp(arg, REDIR_OUT) == 0) {
+				// redirect stdout
 
-                // If this is anything other than the LAST cmd in the list,
-                // then this is an error.
+				//
+				// If the output_dest is something other than REDIRECT_NONE, then
+				// this is an improper command.
+				//
 
-                cmd->output_file_name = strdup(strtok(NULL, SPACE_DELIM));
-                cmd->output_dest = REDIRECT_FILE;
-            }
-            else {
-                // add next param
-                param_t *param = (param_t *) calloc(1, sizeof(param_t));
-                param_t *cparam = cmd->param_list;
+				// If this is anything other than the LAST cmd in the list,
+				// then this is an error.
 
-                cmd->param_count++;
-                // Put something in here to strip out the single quotes if
-                // they are the first/last characters in arg.
-                if (arg[0] == '\'') {
-                    arg++;
-                }
-                if (arg[strlen(arg) - 1] == '\'') {
-                    arg[strlen(arg) - 1] = '\0';
-                }
-                param->param = strdup(arg);
-                if (NULL == cparam) {
-                    cmd->param_list = param;
-                }
-                else {
-                    // I should put a tail pointer on this.
-                    while (cparam->next != NULL) {
-                        cparam = cparam->next;
-                    }
-                    cparam->next = param;
-                }
-            }
-        }
-        // This could overwite some bogus file redirection.
-        if (cmd->list_location > 0) {
-            cmd->input_src = REDIRECT_PIPE;
-        }
-        if (cmd->list_location < (cmd_list->count - 1)) {
-            cmd->output_dest = REDIRECT_PIPE;
-        }
+				cmd->output_file_name = strdup(strtok(NULL, SPACE_DELIM));
+				cmd->output_dest = REDIRECT_FILE;
+			}
+			else {
+				// add next param
+				param_t *param = (param_t *) calloc(1, sizeof(param_t));
+				param_t *cparam = cmd->param_list;
 
-        // No need free with alloca memory.
-        //free(raw);
-        cmd = cmd->next;
-    }
+				cmd->param_count++;
+				// Put something in here to strip out the single quotes if
+				// they are the first/last characters in arg.
+				if (arg[0] == '\'') {
+					arg++;
+				}
+				if (arg[strlen(arg) - 1] == '\'') {
+					arg[strlen(arg) - 1] = '\0';
+				}
+				param->param = strdup(arg);
+				if (NULL == cparam) {
+					cmd->param_list = param;
+				}
+				else {
+					// I should put a tail pointer on this.
+					while (cparam->next != NULL) {
+						cparam = cparam->next;
+					}
+					cparam->next = param;
+				}
+			}
+		}
+		// This could overwite some bogus file redirection.
+		if (cmd->list_location > 0) {
+			cmd->input_src = REDIRECT_PIPE;
+		}
+		if (cmd->list_location < (cmd_list->count - 1)) {
+			cmd->output_dest = REDIRECT_PIPE;
+		}
 
-    if (is_verbose > 0) {
-        print_list(cmd_list);
-    }
+		// No need free with alloca memory.
+		//free(raw);
+		cmd = cmd->next;
+	}
+
+	if (is_verbose > 0) {
+		print_list(cmd_list);
+	}
 }
 
 
@@ -554,7 +636,7 @@ if(cmd && strcmp(cmd, "cd") ==0){
 }	
 //echo command
 else if(cmd && strcmp(cmd, "echo") ==0){
-	echofunc(arglist, argcount);
+echofunc(arglist, argcount);
 }	
 //Bye command
 else if(cmd && strcmp(cmd, "bye") ==0){
