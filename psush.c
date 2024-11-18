@@ -19,7 +19,7 @@
 #define MAX_CMD_LEN 256
 
 //Define functions
-char * historylist[HIST] = {NULL};
+char * historylist[HIST];
 void addhistory(const char * newcmd, char * history[]);
 void read_command( char * newinput);
 void displayhistory(char * history[]);
@@ -29,7 +29,6 @@ bool is_verbose;
 char ** create_raggedy(cmd_t* cmds);
 void exec_pipelines(cmd_list_t * cmd);
 void freehistory(char * history[]);
-
 
 // 1. bye done
 // 2. cd / cd dir done
@@ -76,6 +75,9 @@ int main(int argc, char * argv[]){
 
 	    if (NULL == ret_val) {
 	    printf("\nExiting the shell.\n");
+		    //free history
+		    freehistory(historylist);
+		    free_list(cmd_list);
 	    exit(EXIT_SUCCESS);
 		    break;
 	    }
@@ -96,6 +98,8 @@ int main(int argc, char * argv[]){
 	    if (strcmp(str, BYE_CMD) == 0)
 	    {
 		    //free history
+		    freehistory(historylist);
+		    free_list(cmd_list);
 		    printf("Exiting The Shell.\n");
 		    exit(EXIT_SUCCESS);
 	    }
@@ -151,15 +155,6 @@ int main(int argc, char * argv[]){
     return(EXIT_SUCCESS);
 }
 
-void freehistory(char * history[]){
-    for(int i= 0; i< HIST; i++){
-	free(history[i]);
-	history[i] = NULL;
-    }
-    memset(historylist, 0, sizeof(historylist));
-}
-
-
 void simple_argv(int argc, char *argv[] )
 {
 	int opt;
@@ -171,6 +166,7 @@ void simple_argv(int argc, char *argv[] )
 				// Show something helpful
 				fprintf(stdout, "You must be out of your Vulcan mind if you think\n"
 						"I'm going to put helpful things in here.\n\n");
+				freehistory(historylist);
 				exit(EXIT_SUCCESS);
 				break;
 			case 'v':
@@ -218,6 +214,8 @@ exec_commands( cmd_list_t *cmds )
                 }
                 else {
 			perror( "\nerror finding directory\n");
+		    freehistory(historylist);
+		    free_list(cmds);
 			exit(EXIT_FAILURE);
                     // a sad chdir.  :-(
                 }
@@ -245,7 +243,6 @@ exec_commands( cmd_list_t *cmds )
             // If you really do things correctly, you don't need a special call
             // for a single command, as distinguished from multiple commands.
 	    exec_external(cmd);
-	    free_list(cmds);
         }
     }
     else {
@@ -254,25 +251,20 @@ exec_commands( cmd_list_t *cmds )
         // This really falls into Stage 2.
 	    exec_pipelines(cmds);
     }
-    freehistory(historylist);
-    //free_list(cmds);
 }
 char ** create_raggedy(cmd_t* cmds){
-	int count = 0;
-	char **arr;
-	if(!cmds || !cmds->cmd){
-		printf("null command for raggedy");
-		exit(EXIT_FAILURE);
-	}
-	 count = cmds->param_count;
-	arr = (char **)malloc((count + 2) * sizeof(char *)); //+ 2 for the command in the beginning and the null temrinator
+	param_t *param;
+	char **args = (char **)malloc(4 * sizeof(char *));
+	int i = 0;
+	args[i++] = cmds->cmd;
 
-	if (arr == NULL) {
-		perror("malloc failed");
-		exit(EXIT_FAILURE);
+	param = cmds->param_list;
+	while (param) {
+		args[i++] = param->param;
+		param = param->next;
 	}
-	printf("cmd: %s", cmds->cmd);
-	return arr;
+	args[i] = NULL;
+	return args;
 }
 
 void exec_pipelines(cmd_list_t * cmds){
@@ -283,32 +275,59 @@ void exec_pipelines(cmd_list_t * cmds){
 	pid_t pid;
 	if(!cmd){
 		printf("error finding commands");
+		freehistory(historylist);
+		free_list(cmds);
 		exit(EXIT_FAILURE);
 	}
 	while(cmd){
 		if(cmd->next){
 			if(pipe(pipe_fds) ==-1){
 				printf("error creating pipe");
+				freehistory(historylist);
+				free_list(cmds);
 				exit(EXIT_FAILURE);
 			}
-			printf("\nCreated pipe successfully");
 		}
 		pid = fork();
 		if(pid == -1){
 			perror("Failure Forking");
+			freehistory(historylist);
+			free_list(cmds);
 			exit(EXIT_FAILURE);
 		}else if(pid ==0){
+			if(cmd->output_dest == REDIRECT_FILE){
+				int fdout;
+				fdout = open(cmd->output_file_name,  O_WRONLY | O_CREAT | O_TRUNC,S_IRUSR | S_IWUSR);
+				if(fdout<0){
+					fprintf(stderr,"******* redir out failed %d *******\n", errno);
+					exit(7);
+				}
+				dup2(fdout, STDOUT_FILENO);
+				close(fdout);
+			}
+			if(cmd->input_src == REDIRECT_FILE){
+				int fdin;
+				fdin = open(cmd->input_file_name,  O_RDONLY);
+				if(fdin<0){
+					fprintf(stderr,"******* redir in failed %d *******\n", errno);
+					exit(7);
+				}
+				dup2(fdin, STDIN_FILENO);
+				close(fdin);
+			}
 			if(p_trail != -1)// if not the first pipe
 			{
 				dup2(p_trail, STDIN_FILENO);
 			}
-			if(cmd->next != NULL){ //if not last
+			if(cmd->next != NULL){
 				if (dup2(pipe_fds[1], STDOUT_FILENO) == -1) {
 					perror("dup2 failed for stdout");
+					freehistory(historylist);
+					free_list(cmds);
 					exit(EXIT_FAILURE);
 				}
 			}
-		//	if (p_trail != -1) close(p_trail);
+			if (p_trail != -1) close(p_trail);
 			if (cmd->next != NULL) {
 				close(pipe_fds[0]);
 				close(pipe_fds[1]);
@@ -316,13 +335,14 @@ void exec_pipelines(cmd_list_t * cmds){
 
 			// Execute the command with a raggedy array
 			args = create_raggedy(cmd);
-			execvp(args[0], args);
-
-			if (execvp(args[0], args) == -1) {
-				// If execvp fails
-				perror("Exec failed");
+			if(execvp(args[0], args)== -1) {
+				perror("exec failed");
+				freehistory(historylist);
+				free_list(cmds);
 				exit(EXIT_FAILURE);
 			}
+
+			// If execvp fails
 
 		}
 		// Parent process
@@ -336,14 +356,14 @@ void exec_pipelines(cmd_list_t * cmds){
 
 	}
 	while(wait(NULL)>0);
-	args= NULL;
-	
 
 }
 void exec_external(cmd_t * cmd){
 	pid_t pid = fork();
 	if(pid == -1){
 		perror("Failure Forking");
+		freehistory(historylist);
+		free_cmd(cmd);
 		exit(EXIT_FAILURE);
 	}else if(pid ==0){
 		param_t *param = cmd->param_list;
@@ -380,36 +400,64 @@ void exec_external(cmd_t * cmd){
 		// Execute the external command
 		if (execvp(cmd->cmd, args) == -1) {
 			perror("Exec failed");
+			freehistory(historylist);
+			free_cmd(cmd);
 			exit(EXIT_FAILURE);
 		}
 	}else{
 		wait(NULL);
-
 	}
 
 }
-
-	void
-free_list(cmd_list_t *cmd_list)
-{
-	
-	cmd_t * current = cmd_list->head;
-	cmd_t * temp;
-	while(current){
-		temp = current->next;
-		free_cmd(current);
-		current = temp;
-	}	
-	free(cmd_list);
-	cmd_list = NULL;
-
-	// Proof left to the student.
-	// You thought I was going to do this for you! HA! You get
-	// the enjoyment of doing it for yourself.
-
-	return;
+void freehistory(char * history[]){
+	printf("\n\nfrehistrycalled");
+	for(int i= 0; i< HIST; i++){
+		free(history[i]);
+		history[i] = NULL;
+	}
 }
+void free_list(cmd_list_t *cmd_list) {
+	param_t *next_param;
+	cmd_t *current;
+	param_t *param;
+	if (cmd_list == NULL) return;  // Check for NULL to avoid invalid memory access
 
+	current = cmd_list->head;
+	param = current->param_list;
+	while (current) {
+		cmd_t *next = current->next;
+
+		// Free dynamically allocated memory for cmd_t members
+		if (current->raw_cmd) {
+			free(current->raw_cmd);
+		}
+		if (current->cmd) {
+			free(current->cmd);
+		}
+		if (current->input_file_name) {
+			free(current->input_file_name);
+		}
+		if (current->output_file_name) {
+			free(current->output_file_name);
+		}
+
+		// Free the param_list, if it exists
+		param = current->param_list;
+		while (param) {
+			next_param = param->next;
+			if (param->param) {
+				free(param->param);  // Free the parameter string
+			}
+			free(param);  // Free the param_t structure
+			param = next_param;
+		}
+
+		free(current);  // Free the cmd_t object itself
+		current = next;
+	}
+
+	free(cmd_list);  // Free the cmd_list structure itself
+}
 	void
 print_list(cmd_list_t *cmd_list)
 {
@@ -424,6 +472,7 @@ print_list(cmd_list_t *cmd_list)
 	void
 free_cmd (cmd_t *cmd)
 {
+
 	param_t * paramlist = cmd->param_list;
 	param_t * temp;
 	while(paramlist){
@@ -434,6 +483,8 @@ free_cmd (cmd_t *cmd)
 	}
 
 	if(!cmd){
+			freehistory(historylist);
+		    free_cmd(cmd);
 		exit(EXIT_FAILURE);
 	}
 	/*
@@ -608,115 +659,9 @@ parse_commands(cmd_list_t *cmd_list)
 	if (is_verbose > 0) {
 		print_list(cmd_list);
 	}
-	raw = NULL;
-	arg = NULL;
-	free_cmd(cmd);
-
 }
 
 
-//Define Variables	
-//	cmd_list_t * commandList=NULL;
-/*
-   cmd_t * newCommand = NULL;
-   char * history[HIST] ={'\0'};
-   char * arglist[MAX_ARGS]={'\0'};
-   char input[MAX_CMD_LEN];
-   char* cmd = NULL;
-   char* rawcmd = NULL;
-   char * arg = NULL;
-   int argcount=0;
-   struct passwd * pw = getpwuid(getuid());
-
-   memset(history, 0, sizeof(history));
-   newCommand = calloc(1, sizeof(cmd_t));
-//	commandList = calloc(1,sizeof(cmd_list_t));
-while(1){
-if (getcwd(cwd, sizeof(cwd)) == NULL) {
-perror("getcwd() error");
-exit(EXIT_FAILURE);
-}
-if(gethostname(server, sizeof(server)) == -1){
-perror("host name error");
-exit(EXIT_FAILURE);
-}
-if(isatty(fileno(stdout))){
-printf(" PSUsh %s\n%s@%s # \n", cwd, pw->pw_name, server);
-fflush(stdout);
-}
-//cwd Command
-
-//Read User Input
-read_command(input);
-input[strcspn(input, "\n")] = 0;
-
-//raw command
-rawcmd=strdup(input);
-//make sure you're reading the input correctly and then make a loop to iterate the inputlist
-//inside the loop initialize a cmd_t struct, similar to list use calloc to allocate size for cmd_t
-
-//Separate Command
-cmd = strtok(input, " ");
-
-//parse command
-if(cmd){
-newCommand->cmd = strdup(cmd);
-newCommand->raw_cmd = strdup(rawcmd);
-}
-newCommand->param_count =0;
-newCommand->param_list = calloc(1, sizeof(param_t));
-
-while((cmd = strtok(NULL, " ")) != NULL){
-newCommand->param_list[newCommand->param_count].param = strdup(cmd)
-newCommand->param_count++;
-}
-printf("Command : %s\n", newCommand->cmd);
-printf("Raw Command : %s\n", newCommand->raw_cmd);
-printf("params : ");
-for(int i=0; i< newCommand->paran_count; i++){
-printf("%s ", newCommand->param_list[i].param);
-}
-printf("Raw Command : %s\n", newCommand->cmd);
-
-
-
-//Store Argument List
-
-//cd command
-if(cmd && strcmp(cmd, "cd") ==0){
-}	
-//echo command
-else if(cmd && strcmp(cmd, "echo") ==0){
-echofunc(arglist, argcount);
-}	
-//Bye command
-else if(cmd && strcmp(cmd, "bye") ==0){
-	printf("Exiting The Shell.\n");
-	exit(EXIT_SUCCESS);
-}
-else if(cmd && strcmp(cmd, "history") ==0){
-	displayhistory(history);
-}
-//Extneral commands
-else if(cmd){
-	pid_t pid = fork();
-	if (pid == -1) {
-		perror("fork failed");
-		exit(EXIT_FAILURE);
-	} else if (pid == 0) {
-		arglist[0]=  cmd;
-		argcount++;
-
-	}
-
-}
-
-printf("\n");
-}
-
-
-exit(EXIT_SUCCESS);
-*/
 
 
 void echofunc(param_t * print, int argcount){
@@ -743,6 +688,7 @@ void read_command(char * newinput){
 		// Handle EOF (Ctrl+D) or read error
 		printf("\nExiting the shell.\n");
 		newinput[0] = '\0'; // Set input to empty so we can exit gracefully
+			freehistory(historylist);
 		exit(EXIT_SUCCESS);
 	}
 }
@@ -750,13 +696,6 @@ void addhistory(const char * newcmd, char * history[]){
 	//free oldest command
 	free(history[HIST-1]);
 
-	//for (int i = HIST -2; i <=0; i--){
-	//	history[i+1] = history[i];
-	//}
 	memmove(&(history[1]), &(history[0]), (HIST-1) * sizeof(char* ));
-	history[0] = strdup(newcmd); // Duplicate new command
-	if (!history[0]) {
-		perror("strdup failed");
-		exit(EXIT_FAILURE);
-	}
+	history[0] = strdup(newcmd);
 }
