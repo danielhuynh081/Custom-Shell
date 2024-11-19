@@ -29,6 +29,7 @@ bool is_verbose;
 char ** create_raggedy(cmd_t* cmds);
 void exec_pipelines(cmd_list_t * cmd);
 void freehistory(char * history[]);
+void handle_sigint(cmd_list_t cmd_list);
 
 // 1. bye done
 // 2. cd / cd dir done
@@ -39,12 +40,12 @@ void freehistory(char * history[]);
 
 //Main
 int main(int argc, char * argv[]){
+cmd_list_t *cmd_list = NULL;
     char str[MAX_STR_LEN] = {'\0'};
     char *ret_val = NULL;
     char *raw_cmd = NULL;
     char cwd[1024];
     char server[50];
-    cmd_list_t *cmd_list = NULL;
     int cmd_count = 0;
     char prompt[10] = {'\0'};
 
@@ -73,13 +74,13 @@ int main(int argc, char * argv[]){
 	    memset(str, 0, MAX_STR_LEN);
 	    ret_val = fgets(str, MAX_STR_LEN, stdin);
 
+	    //Control D
 	    if (NULL == ret_val) {
-	    printf("\nExiting the shell.\n");
 		    //free history
 		    freehistory(historylist);
 		    free_list(cmd_list);
-	    exit(EXIT_SUCCESS);
-		    break;
+		    printf("\nExiting the shell.\n");
+		    exit(EXIT_SUCCESS);
 	    }
 
 	    // STOMP on the pesky trailing newline returned from fgets().
@@ -154,6 +155,7 @@ int main(int argc, char * argv[]){
 
     return(EXIT_SUCCESS);
 }
+
 
 void simple_argv(int argc, char *argv[] )
 {
@@ -410,7 +412,6 @@ void exec_external(cmd_t * cmd){
 
 }
 void freehistory(char * history[]){
-	printf("\n\nfrehistrycalled");
 	for(int i= 0; i< HIST; i++){
 		free(history[i]);
 		history[i] = NULL;
